@@ -13,6 +13,9 @@ data/raw/*
 data/processed/*
 data/exports/*
 
+#macOS
+.DS_Store
+
 # Logs
 logs/
 
@@ -243,4 +246,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-.DS_Store
