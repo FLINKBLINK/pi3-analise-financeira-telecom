@@ -18,6 +18,7 @@ REGRAS APLICADAS
   4. Serie encadeada da Brisanet conforme config.ENCADEAMENTO
   5. capital_terceiros = passivo_circulante + passivo_nao_circulante
   6. Validacao do balanco: ativo_total deve bater com passivo_total
+  7. Observacoes de auditoria aplicadas de config.OBSERVACOES
 
 Este script e IDEMPOTENTE: reexecutar substitui os dados, nao duplica.
 
@@ -37,7 +38,8 @@ from config import (
     BANCO, DIR_LOGS, DIR_EXPORTS, RAIZ,
     ANOS, DEMONSTRACOES, ENTIDADES, ENCADEAMENTO,
     CONTAS, ORDEM_INDICADORES, CSV_KWARGS, ORDEM_EXERCICIO, ESCALA,
-    COLUNAS_UTEIS, normalizar_cvm, caminho_arquivo, entidade_do_ano,
+    COLUNAS_UTEIS, OBSERVACOES,
+    normalizar_cvm, caminho_arquivo, entidade_do_ano,
 )
 
 logging.basicConfig(
@@ -51,6 +53,13 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 TOLERANCIA_BALANCO = 0.01  # 1% de diferenca aceita entre ativo e passivo
+
+# Colunas finais da tabela financial_data, na ordem
+COLUNAS_FINAIS = (
+    ["empresa", "ano", "cd_cvm", "razao_social"]
+    + ORDEM_INDICADORES
+    + ["capital_terceiros", "validacao_balanco_ok", "observacao"]
+)
 
 
 # ===============================================================
@@ -169,9 +178,7 @@ def extrair_indicadores(conn: sqlite3.Connection) -> pd.DataFrame:
             continue
 
         # ano de referencia
-        df["ano"] = pd.to_datetime(
-            df["dt_fim_exerc"], errors="coerce"
-        ).dt.year
+        df["ano"] = pd.to_datetime(df["dt_fim_exerc"], errors="coerce").dt.year
         df["ano"] = df["ano"].fillna(
             pd.to_datetime(df["dt_refer"], errors="coerce").dt.year
         )
@@ -237,8 +244,8 @@ def aplicar_encadeamento(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df[manter].copy()
 
-    for grupo, regra in ENCADEAMENTO.items():
-        anos_grupo = sorted(df[df["grupo"] == grupo]["ano"].unique())
+    for grupo in ENCADEAMENTO:
+        anos_grupo = sorted(int(a) for a in df[df["grupo"] == grupo]["ano"].unique())
         entidades_usadas = sorted(df[df["grupo"] == grupo]["cd_cvm"].unique())
         log.info(
             "  %-10s | anos %s | entidades %s",
@@ -298,12 +305,20 @@ def montar_base(df: pd.DataFrame) -> pd.DataFrame:
         (diff / denom) < TOLERANCIA_BALANCO
     ).astype("Int64")
 
-    colunas = (
-        ["empresa", "ano", "cd_cvm", "razao_social"]
-        + ORDEM_INDICADORES
-        + ["capital_terceiros", "validacao_balanco_ok"]
+    # ---- observacoes de auditoria ----
+    # Documentadas em config.OBSERVACOES. Sobrevivem a recargas.
+    base["observacao"] = base.apply(
+        lambda r: OBSERVACOES.get((r["empresa"], int(r["ano"]))), axis=1
     )
-    base = base[colunas].sort_values(["empresa", "ano"]).reset_index(drop=True)
+    n_obs = base["observacao"].notna().sum()
+    if n_obs:
+        log.info("  %d observacao(oes) de auditoria aplicada(s)", int(n_obs))
+
+    base = (
+        base[COLUNAS_FINAIS]
+        .sort_values(["empresa", "ano"])
+        .reset_index(drop=True)
+    )
 
     log.info("  Base montada: %d linhas", len(base))
     return base
@@ -350,16 +365,36 @@ def auditar(base: pd.DataFrame) -> None:
             len(ruim),
         )
 
+    # observacoes de auditoria registradas
+    com_obs = base[base["observacao"].notna()]
+    if not com_obs.empty:
+        log.info("\n  Observacoes de auditoria (%d):", len(com_obs))
+        for _, r in com_obs.iterrows():
+            log.info("    %s %d:", r["empresa"], r["ano"])
+            for linha in _quebrar(str(r["observacao"]), 64):
+                log.info("      %s", linha)
+
+
+def _quebrar(texto: str, largura: int) -> list:
+    """Quebra um texto longo em linhas, para o log ficar legivel."""
+    palavras, linhas, atual = texto.split(), [], ""
+    for p in palavras:
+        if len(atual) + len(p) + 1 > largura:
+            linhas.append(atual)
+            atual = p
+        else:
+            atual = f"{atual} {p}".strip()
+    if atual:
+        linhas.append(atual)
+    return linhas
+
 
 def gravar(conn: sqlite3.Connection, base: pd.DataFrame) -> None:
     conn.execute("DELETE FROM financial_data")
 
-    cols = [
-        "empresa", "ano", "cd_cvm", "razao_social",
-        *ORDEM_INDICADORES,
-        "capital_terceiros", "validacao_balanco_ok",
-    ]
-    base[cols].to_sql("financial_data", conn, if_exists="append", index=False)
+    base[COLUNAS_FINAIS].to_sql(
+        "financial_data", conn, if_exists="append", index=False
+    )
 
     conn.execute(
         "INSERT INTO etl_log (etapa, detalhe, registros) VALUES (?,?,?)",
@@ -374,9 +409,9 @@ def gravar(conn: sqlite3.Connection, base: pd.DataFrame) -> None:
 
 
 def exibir(base: pd.DataFrame) -> None:
-    print("\n" + "=" * 78)
+    print("\n" + "=" * 82)
     print("BASE ANALITICA (valores em R$ milhoes)")
-    print("=" * 78)
+    print("=" * 82)
 
     v = base.copy()
     num = [
@@ -386,6 +421,9 @@ def exibir(base: pd.DataFrame) -> None:
     for c in num:
         v[c] = (v[c] / 1_000_000).round(1)
 
+    # marca visual para linhas com observacao de auditoria
+    v["obs"] = v["observacao"].notna().map({True: "*", False: ""})
+
     v = v.rename(columns={
         "receita_liquida": "receita", "lucro_liquido": "lucro",
         "ativo_total": "ativo", "patrimonio_liquido": "PL",
@@ -393,7 +431,12 @@ def exibir(base: pd.DataFrame) -> None:
     })
 
     print(v[["empresa", "ano", "cd_cvm", "receita", "lucro",
-             "ativo", "PL", "cap_terc", "FCO"]].to_string(index=False))
+             "ativo", "PL", "cap_terc", "FCO", "obs"]].to_string(index=False))
+
+    if (v["obs"] == "*").any():
+        print("\n  * linha com observacao de auditoria registrada.")
+        print("    Consulte: SELECT empresa, ano, observacao FROM financial_data")
+        print("              WHERE observacao IS NOT NULL;")
 
 
 # ===============================================================
@@ -425,10 +468,10 @@ def main() -> None:
         gravar(conn, base)
         exibir(base)
 
-    print("\n" + "=" * 78)
+    print("\n" + "=" * 82)
     print("CARGA CONCLUIDA")
     print("Confira: SELECT * FROM vw_base_analitica;")
-    print("=" * 78)
+    print("=" * 82)
 
 
 if __name__ == "__main__":

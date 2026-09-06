@@ -6,7 +6,8 @@ Projeto Integrador III - Fatec Cotia
 Analise financeira de operadoras regionais de telecomunicacoes (CVM)
 
 Parametros centrais do projeto. Todo ajuste de escopo (anos, empresas,
-contas contabeis) deve ser feito AQUI, nunca dentro dos scripts.
+contas contabeis, observacoes de auditoria) deve ser feito AQUI, nunca
+dentro dos scripts.
 """
 
 from pathlib import Path
@@ -136,7 +137,29 @@ CONTAS = {
 ORDEM_INDICADORES = list(CONTAS.keys())
 
 # ---------------------------------------------------------------
-# 7. LEITURA DOS CSVs DA CVM
+# 7. OBSERVACOES DE AUDITORIA
+# ---------------------------------------------------------------
+# Dados atipicos identificados durante a validacao da Sprint 2.
+# Chave: (empresa, ano). Valor: texto da observacao.
+#
+# Estas observacoes sao gravadas na coluna financial_data.observacao
+# e sobrevivem a qualquer recarga do ETL.
+OBSERVACOES = {
+    ("Desktop", 2021): (
+        "FCO atipico: R$ 753,0 mi, equivalente a 215,8% da receita liquida "
+        "e cerca de 11x o EBIT do exercicio. Ano do IPO e da consolidacao de "
+        "quatro aquisicoes (C-Lig, Starnet, Net Barretos e LPNet). "
+        "Extracao validada: nao ha reapresentacao, a conta 6.01 corresponde "
+        "a Atividades Operacionais e a DFC fecha "
+        "(6.01 + 6.02 + 6.03 = 6.05, diferenca zero). "
+        "Provavel efeito nao recorrente de capital de giro decorrente da "
+        "consolidacao das adquiridas. Consultar Notas Explicativas. "
+        "Tratar como outlier no calculo de indicadores."
+    ),
+}
+
+# ---------------------------------------------------------------
+# 8. LEITURA DOS CSVs DA CVM
 # ---------------------------------------------------------------
 # NUNCA abra estes arquivos no Excel antes de processar: ele corrompe
 # os valores numericos. Separador ";", encoding Latin-1.
@@ -157,7 +180,7 @@ COLUNAS_UTEIS = [
 
 
 # ---------------------------------------------------------------
-# 8. UTILITARIOS
+# 9. UTILITARIOS
 # ---------------------------------------------------------------
 def normalizar_cvm(serie):
     """

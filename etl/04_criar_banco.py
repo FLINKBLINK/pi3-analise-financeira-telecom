@@ -10,7 +10,7 @@ ARQUITETURA EM CAMADAS
   Camada 1 - RAW        : espelho dos CSVs da CVM, sem transformacao
   Camada 2 - ANALITICA  : financial_data (uma linha por empresa/ano)
   Camada 3 - INDICADORES: financial_indicators (vazia ate a Sprint 3)
-  Apoio                 : dim_entidade, etl_log
+  Apoio                 : dim_entidade, etl_log, vw_base_analitica
 
 Guardar a camada RAW no banco evita ter que voltar aos ZIPs da CVM
 caso surja a necessidade de um novo indicador (ex.: EBITDA).
@@ -109,6 +109,10 @@ CREATE TABLE IF NOT EXISTS financial_data (
     -- validacao: ativo_total deve ser igual a passivo_total
     validacao_balanco_ok      INTEGER,
 
+    -- observacoes de auditoria sobre dados atipicos
+    -- alimentada por config.OBSERVACOES
+    observacao                TEXT,
+
     atualizado_em             TEXT DEFAULT (datetime('now','localtime')),
 
     PRIMARY KEY (empresa, ano)
@@ -163,7 +167,8 @@ SELECT
     f.passivo_nao_circulante,
     f.patrimonio_liquido,
     f.fluxo_caixa_operacional,
-    f.validacao_balanco_ok
+    f.validacao_balanco_ok,
+    f.observacao
 FROM financial_data f
 ORDER BY f.empresa, f.ano;
 """
@@ -193,6 +198,33 @@ def criar(conn: sqlite3.Connection) -> None:
     cur.execute(DDL_LOG)
 
     log.info("Criando vw_base_analitica")
+    cur.execute(DDL_VIEW)
+
+    conn.commit()
+
+
+def migrar(conn: sqlite3.Connection) -> None:
+    """
+    Adiciona colunas novas a bancos criados por versoes anteriores
+    deste script, sem perder os dados ja carregados.
+    """
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(financial_data)")
+    existentes = {linha[1] for linha in cur.fetchall()}
+
+    novas = {
+        "observacao": "TEXT",
+    }
+
+    for coluna, tipo in novas.items():
+        if coluna not in existentes:
+            cur.execute(
+                f"ALTER TABLE financial_data ADD COLUMN {coluna} {tipo}"
+            )
+            log.info("Migracao | coluna adicionada: financial_data.%s", coluna)
+
+    # a view precisa ser recriada se a estrutura mudou
+    cur.execute("DROP VIEW IF EXISTS vw_base_analitica")
     cur.execute(DDL_VIEW)
 
     conn.commit()
@@ -277,6 +309,8 @@ def main() -> None:
 
     with sqlite3.connect(BANCO) as conn:
         criar(conn)
+        if not novo:
+            migrar(conn)
         popular_dimensao(conn)
         conn.execute(
             "INSERT INTO etl_log (etapa, detalhe, registros) VALUES (?,?,?)",
