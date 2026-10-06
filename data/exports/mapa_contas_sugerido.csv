@@ -1,0 +1,55 @@
+﻿indicador;grupo;CD_CONTA;DS_CONTA;codigo_esperado;bate_codigo_esperado;anos;ocorrencias
+aplicacoes_financeiras;Brisanet;1.01.02;Aplicações Financeiras;1.01.02;True;2020, 2021, 2022, 2023, 2024, 2025;8
+aplicacoes_financeiras;Desktop;1.01.02;Aplicações Financeiras;1.01.02;True;2020, 2021, 2022, 2023, 2024, 2025;6
+aplicacoes_financeiras;Unifique;1.01.02;Aplicações Financeiras;1.01.02;True;2020, 2021, 2022, 2023, 2024, 2025;6
+ativo_circulante;Brisanet;1.01;Ativo Circulante;1.01;True;2020, 2021, 2022, 2023, 2024, 2025;8
+ativo_circulante;Desktop;1.01;Ativo Circulante;1.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+ativo_circulante;Unifique;1.01;Ativo Circulante;1.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+ativo_total;Brisanet;1;Ativo Total;1;True;2020, 2021, 2022, 2023, 2024, 2025;8
+ativo_total;Desktop;1;Ativo Total;1;True;2020, 2021, 2022, 2023, 2024, 2025;6
+ativo_total;Unifique;1;Ativo Total;1;True;2020, 2021, 2022, 2023, 2024, 2025;6
+caixa_equivalentes;Brisanet;1.01.01;Caixa e Equivalentes de Caixa;1.01.01;True;2020, 2021, 2022, 2023, 2024, 2025;8
+caixa_equivalentes;Desktop;1.01.01;Caixa e Equivalentes de Caixa;1.01.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+caixa_equivalentes;Unifique;1.01.01;Caixa e Equivalentes de Caixa;1.01.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+despesas_financeiras;Brisanet;3.06.02;Despesas Financeiras;3.06.02;True;2020, 2021, 2022, 2023, 2024, 2025;8
+despesas_financeiras;Desktop;3.06.02;Despesas Financeiras;3.06.02;True;2020, 2021, 2022, 2023, 2024, 2025;6
+despesas_financeiras;Unifique;3.06.02;Despesas Financeiras;3.06.02;True;2020, 2021, 2022, 2023, 2024, 2025;6
+emprestimos_cp;Brisanet;2.01.04;Empréstimos e Financiamentos;2.01.04;True;2020, 2021, 2022, 2023, 2024, 2025;8
+emprestimos_cp;Desktop;2.01.04;Empréstimos e Financiamentos;2.01.04;True;2020, 2021, 2022, 2023, 2024, 2025;6
+emprestimos_cp;Unifique;2.01.04;Empréstimos e Financiamentos;2.01.04;True;2020, 2021, 2022, 2023, 2024, 2025;6
+emprestimos_lp;Brisanet;2.02.01;Empréstimos e Financiamentos;2.02.01;True;2020, 2021, 2022, 2023, 2024, 2025;8
+emprestimos_lp;Desktop;2.02.01;Empréstimos e Financiamentos;2.02.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+emprestimos_lp;Unifique;2.02.01;Empréstimos e Financiamentos;2.02.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+fluxo_caixa_financiamento;Brisanet;6.03;Caixa Líquido Atividades de Financiamento;6.03;True;2020, 2021, 2022, 2023, 2024, 2025;8
+fluxo_caixa_financiamento;Desktop;6.03;Caixa Líquido Atividades de Financiamento;6.03;True;2020, 2021, 2022, 2023, 2024, 2025;6
+fluxo_caixa_financiamento;Unifique;6.03;Caixa Líquido Atividades de Financiamento;6.03;True;2020, 2021, 2022, 2023, 2024, 2025;6
+fluxo_caixa_investimento;Brisanet;6.02;Caixa Líquido Atividades de Investimento;6.02;True;2020, 2021, 2022, 2023, 2024, 2025;8
+fluxo_caixa_investimento;Desktop;6.02;Caixa Líquido Atividades de Investimento;6.02;True;2020, 2021, 2022, 2023, 2024, 2025;6
+fluxo_caixa_investimento;Unifique;6.02;Caixa Líquido Atividades de Investimento;6.02;True;2020, 2021, 2022, 2023, 2024, 2025;6
+fluxo_caixa_operacional;Brisanet;6.01;Caixa Líquido Atividades Operacionais;6.01;True;2020, 2021, 2022, 2023, 2024, 2025;8
+fluxo_caixa_operacional;Desktop;6.01;Caixa Líquido Atividades Operacionais;6.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+fluxo_caixa_operacional;Unifique;6.01;Caixa Líquido Atividades Operacionais;6.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+lucro_liquido;Brisanet;3.11;Lucro/Prejuízo Consolidado do Período;3.11;True;2020, 2021, 2022, 2023, 2024, 2025;8
+lucro_liquido;Desktop;3.11;Lucro/Prejuízo Consolidado do Período;3.11;True;2020, 2021, 2022, 2023, 2024, 2025;6
+lucro_liquido;Unifique;3.11;Lucro/Prejuízo Consolidado do Período;3.11;True;2020, 2021, 2022, 2023, 2024, 2025;6
+passivo_circulante;Brisanet;2.01;Passivo Circulante;2.01;True;2020, 2021, 2022, 2023, 2024, 2025;8
+passivo_circulante;Desktop;2.01;Passivo Circulante;2.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+passivo_circulante;Unifique;2.01;Passivo Circulante;2.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+passivo_nao_circulante;Brisanet;2.02;Passivo Não Circulante;2.02;True;2020, 2021, 2022, 2023, 2024, 2025;8
+passivo_nao_circulante;Desktop;2.02;Passivo Não Circulante;2.02;True;2020, 2021, 2022, 2023, 2024, 2025;6
+passivo_nao_circulante;Unifique;2.02;Passivo Não Circulante;2.02;True;2020, 2021, 2022, 2023, 2024, 2025;6
+passivo_total;Brisanet;2;Passivo Total;2;True;2020, 2021, 2022, 2023, 2024, 2025;8
+passivo_total;Desktop;2;Passivo Total;2;True;2020, 2021, 2022, 2023, 2024, 2025;6
+passivo_total;Unifique;2;Passivo Total;2;True;2020, 2021, 2022, 2023, 2024, 2025;6
+patrimonio_liquido;Brisanet;2.03;Patrimônio Líquido Consolidado;2.03;True;2020, 2021, 2022, 2023, 2024, 2025;8
+patrimonio_liquido;Desktop;2.03;Patrimônio Líquido Consolidado;2.03;True;2020, 2021, 2022, 2023, 2024, 2025;6
+patrimonio_liquido;Unifique;2.03;Patrimônio Líquido Consolidado;2.03;True;2020, 2021, 2022, 2023, 2024, 2025;6
+receita_liquida;Brisanet;3.01;Receita de Venda de Bens e/ou Serviços;3.01;True;2020, 2021, 2022, 2023, 2024, 2025;8
+receita_liquida;Desktop;3.01;Receita de Venda de Bens e/ou Serviços;3.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+receita_liquida;Unifique;3.01;Receita de Venda de Bens e/ou Serviços;3.01;True;2020, 2021, 2022, 2023, 2024, 2025;6
+resultado_financeiro;Brisanet;3.06;Resultado Financeiro;3.06;True;2020, 2021, 2022, 2023, 2024, 2025;8
+resultado_financeiro;Desktop;3.06;Resultado Financeiro;3.06;True;2020, 2021, 2022, 2023, 2024, 2025;6
+resultado_financeiro;Unifique;3.06;Resultado Financeiro;3.06;True;2020, 2021, 2022, 2023, 2024, 2025;6
+resultado_operacional;Brisanet;3.05;Resultado Antes do Resultado Financeiro e dos Tributos;3.05;True;2020, 2021, 2022, 2023, 2024, 2025;8
+resultado_operacional;Desktop;3.05;Resultado Antes do Resultado Financeiro e dos Tributos;3.05;True;2020, 2021, 2022, 2023, 2024, 2025;6
+resultado_operacional;Unifique;3.05;Resultado Antes do Resultado Financeiro e dos Tributos;3.05;True;2020, 2021, 2022, 2023, 2024, 2025;6

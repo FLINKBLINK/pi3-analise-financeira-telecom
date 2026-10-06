@@ -1,0 +1,9 @@
+﻿empresa;ano;indicador;tipo;motivo
+Brisanet;2021;cobertura_caixa;distorcido;Lucro líquido próximo de zero (0,3% da receita): a razão FCO/lucro fica inflada.
+Desktop;2020;roe;nao_calculado;PL inicial não divulgado na DFP do ano: média indisponível.
+Desktop;2020;roa;nao_calculado;Ativo inicial não divulgado na DFP do ano: média indisponível.
+Desktop;2021;margem_fco;atipico;FCO maior que a receita do ano: valor atípico, mantido como publicado (ver etl/07_diagnostico_dfc.py).
+Desktop;2021;cobertura_caixa;atipico;FCO maior que a receita do ano: valor atípico, mantido como publicado (ver etl/07_diagnostico_dfc.py).
+Unifique;2021;divida_liquida_ebitda;contexto;Caixa líquido: caixa e aplicações superam a dívida bruta (indicador negativo).
+Unifique;2022;divida_liquida_ebitda;contexto;Caixa líquido: caixa e aplicações superam a dívida bruta (indicador negativo).
+Unifique;2023;divida_liquida_ebitda;contexto;Caixa líquido: caixa e aplicações superam a dívida bruta (indicador negativo).
