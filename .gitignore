@@ -1,17 +1,25 @@
+# ===============================================================
+# PROJETO INTEGRADOR III - regras do projeto
+# ===============================================================
+# O dashboard publicado no Streamlit Community Cloud le o banco
+# database/telecom.db e (opcionalmente) os CSVs de data/exports/.
+# Por isso ESTES ARQUIVOS PRECISAM IR PARA O GITHUB - nao ignore.
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
 
-# Banco de dados
+# Banco de dados: so o banco do projeto e versionado
 *.db
 *.sqlite
 *.sqlite3
+!database/telecom.db
 
-# Dados
+# Dados brutos da CVM (6 a 22 MB por arquivo): nao versionar.
+# Para recriar: python etl/00_baixar_dados_cvm.py
 data/raw/*
 data/processed/*
-data/exports/*
 
 #macOS
 .DS_Store
@@ -19,8 +27,8 @@ data/exports/*
 # Logs
 logs/
 
-# Streamlit cache
-.streamlit/
+# Streamlit: versione .streamlit/config.toml (tema); NUNCA o secrets.toml
+.streamlit/secrets.toml
 
 # PyCharm
 .idea/
