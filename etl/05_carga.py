@@ -18,7 +18,13 @@ REGRAS APLICADAS
   4. Serie encadeada da Brisanet conforme config.ENCADEAMENTO
   5. capital_terceiros = passivo_circulante + passivo_nao_circulante
   6. Validacao do balanco: ativo_total deve bater com passivo_total
-  7. Observacoes de auditoria aplicadas de config.OBSERVACOES
+  7. Validacao da identidade contabil: PC + PNC + PL == ativo_total
+     (teste descrito na secao 6.1 do relatorio da Sprint 2)
+  8. Linhas DUPLICADAS na origem sao removidas na leitura. A DFP 2023 da
+     Brisanet Servicos vem com centenas de linhas repetidas nos 4 arquivos
+     da CVM - nao e reapresentacao (a versao e a mesma).
+  9. Observacoes de auditoria (config.OBSERVACOES) gravadas na coluna
+     financial_data.observacao a cada execucao.
 
 Este script e IDEMPOTENTE: reexecutar substitui os dados, nao duplica.
 
@@ -34,12 +40,14 @@ import sqlite3
 
 import pandas as pd
 
+import numpy as np
+
 from config import (
     BANCO, DIR_LOGS, DIR_EXPORTS, RAIZ,
     ANOS, DEMONSTRACOES, ENTIDADES, ENCADEAMENTO,
-    CONTAS, ORDEM_INDICADORES, CSV_KWARGS, ORDEM_EXERCICIO, ESCALA,
-    COLUNAS_UTEIS, OBSERVACOES,
-    normalizar_cvm, caminho_arquivo, entidade_do_ano,
+    CONTAS, CONTAS_POR_DESCRICAO, ORDEM_INDICADORES, VARIAVEIS_NUCLEO,
+    OBSERVACOES, CSV_KWARGS, ORDEM_EXERCICIO, ESCALA,
+    COLUNAS_UTEIS, normalizar_cvm, caminho_arquivo, entidade_do_ano,
 )
 
 logging.basicConfig(
@@ -53,13 +61,13 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 TOLERANCIA_BALANCO = 0.01  # 1% de diferenca aceita entre ativo e passivo
+TOLERANCIA_IDENTIDADE = 1_000  # R$ 1 mil = 1 unidade na escala da CVM
 
-# Colunas finais da tabela financial_data, na ordem
-COLUNAS_FINAIS = (
-    ["empresa", "ano", "cd_cvm", "razao_social"]
-    + ORDEM_INDICADORES
-    + ["capital_terceiros", "validacao_balanco_ok", "observacao"]
-)
+# Colunas gravadas em financial_data (mesma ordem do 04_criar_banco.py)
+COLUNAS_DERIVADAS = [
+    "capital_terceiros", "ebitda", "divida_bruta", "divida_liquida",
+    "validacao_balanco_ok", "validacao_identidade_ok", "observacao",
+]
 
 
 # ===============================================================
@@ -84,6 +92,16 @@ def ler_csv(demonstracao: str, ano: int) -> pd.DataFrame:
     if df.empty:
         log.warning("  %d | nenhuma entidade do projeto encontrada", ano)
         return df
+
+    # linhas repetidas no proprio arquivo da CVM (ex.: Brisanet Servicos 2023)
+    repetidas = df.duplicated()
+    if repetidas.any():
+        entidades = ", ".join(sorted(df.loc[repetidas, "CD_CVM"].unique()))
+        df = df[~repetidas].copy()
+        log.warning(
+            "  %d | %d linhas DUPLICADAS na origem removidas (CD_CVM %s)",
+            ano, int(repetidas.sum()), entidades,
+        )
 
     # valor numerico com escala aplicada
     valor = pd.to_numeric(
@@ -178,7 +196,9 @@ def extrair_indicadores(conn: sqlite3.Connection) -> pd.DataFrame:
             continue
 
         # ano de referencia
-        df["ano"] = pd.to_datetime(df["dt_fim_exerc"], errors="coerce").dt.year
+        df["ano"] = pd.to_datetime(
+            df["dt_fim_exerc"], errors="coerce"
+        ).dt.year
         df["ano"] = df["ano"].fillna(
             pd.to_datetime(df["dt_refer"], errors="coerce").dt.year
         )
@@ -186,9 +206,11 @@ def extrair_indicadores(conn: sqlite3.Connection) -> pd.DataFrame:
         df["ano"] = df["ano"].astype(int)
 
         # reapresentacoes: fica a maior versao
+        # (as duplicatas exatas ja foram removidas na leitura; se sobrar
+        # mais de uma linha por empresa/ano aqui, sao versoes diferentes)
         antes = len(df)
         df = (
-            df.sort_values("versao")
+            df.sort_values("versao", kind="stable")
               .drop_duplicates(subset=["cd_cvm", "ano"], keep="last")
         )
         removidas = antes - len(df)
@@ -197,15 +219,65 @@ def extrair_indicadores(conn: sqlite3.Connection) -> pd.DataFrame:
         registros.append(df[["cd_cvm", "ano", "indicador", "vl_conta"]])
 
         log.info(
-            "  %-24s | conta %-6s | %3d registros%s",
+            "  %-26s | conta %-8s | %3d registros%s",
             indicador, codigo, len(df),
-            f" ({removidas} reapresentacoes removidas)" if removidas else "",
+            f" ({removidas} versoes anteriores removidas)" if removidas else "",
         )
+
+    registros.extend(extrair_por_descricao(conn))
 
     if not registros:
         raise SystemExit("Nenhum indicador extraido. Verifique a camada raw.")
 
     return pd.concat(registros, ignore_index=True)
+
+
+def extrair_por_descricao(conn: sqlite3.Connection) -> list:
+    """
+    Contas NAO fixas (ex.: depreciacao na DFC). Localiza pela descricao
+    dentro de um grupo fixo e exige EXATAMENTE uma conta por empresa/ano.
+    """
+    saida = []
+    for indicador, (dem, prefixo, trecho) in CONTAS_POR_DESCRICAO.items():
+        tabela = f"raw_{dem.lower()}"
+        df = pd.read_sql(
+            f"""
+            SELECT cd_cvm, versao, dt_fim_exerc, dt_refer, cd_conta, ds_conta, vl_conta
+            FROM {tabela}
+            WHERE TRIM(cd_conta) LIKE ?
+              AND UPPER(TRIM(ordem_exerc)) = ?
+            """,
+            conn,
+            params=(prefixo + "%", ORDEM_EXERCICIO),
+        )
+        df = df[df["ds_conta"].fillna("").str.contains(trecho, case=False)].copy()
+        if df.empty:
+            log.warning("  [!] %s | nenhuma conta encontrada pela descricao", indicador)
+            continue
+
+        df["ano"] = pd.to_datetime(df["dt_fim_exerc"], errors="coerce").dt.year
+        df = df[df["ano"].notna()].copy()
+        df["ano"] = df["ano"].astype(int)
+        df = df.sort_values("versao", kind="stable").drop_duplicates(
+            subset=["cd_cvm", "ano", "cd_conta"], keep="last"
+        )
+
+        qtd = df.groupby(["cd_cvm", "ano"])["cd_conta"].transform("nunique")
+        ambiguas = df[qtd > 1]
+        for (cd, ano), bloco in ambiguas.groupby(["cd_cvm", "ano"]):
+            log.warning(
+                "  [!] %s | %s %d | %d contas candidatas (%s) - valor deixado nulo",
+                indicador, cd, ano, len(bloco), ", ".join(bloco["cd_conta"]),
+            )
+        df = df[qtd == 1].copy()
+
+        df["indicador"] = indicador
+        saida.append(df[["cd_cvm", "ano", "indicador", "vl_conta"]])
+        log.info(
+            "  %-26s | %-8s | %3d registros (localizada pela descricao)",
+            indicador, prefixo + "*", len(df),
+        )
+    return saida
 
 
 def aplicar_encadeamento(df: pd.DataFrame) -> pd.DataFrame:
@@ -244,9 +316,9 @@ def aplicar_encadeamento(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df[manter].copy()
 
-    for grupo in ENCADEAMENTO:
+    for grupo, regra in ENCADEAMENTO.items():
         anos_grupo = sorted(int(a) for a in df[df["grupo"] == grupo]["ano"].unique())
-        entidades_usadas = sorted(df[df["grupo"] == grupo]["cd_cvm"].unique())
+        entidades_usadas = sorted(str(c) for c in df[df["grupo"] == grupo]["cd_cvm"].unique())
         log.info(
             "  %-10s | anos %s | entidades %s",
             grupo, anos_grupo, entidades_usadas,
@@ -276,7 +348,7 @@ def montar_base(df: pd.DataFrame) -> pd.DataFrame:
 
     for col in ORDEM_INDICADORES:
         if col not in base.columns:
-            base[col] = pd.NA
+            base[col] = np.nan
             log.warning("  Indicador ausente: %s", col)
 
     # ---- capital de terceiros ----
@@ -298,27 +370,48 @@ def montar_base(df: pd.DataFrame) -> pd.DataFrame:
             int(sem_capital.sum()),
         )
 
-    # ---- validacao do balanco ----
+    # ---- EBITDA, divida bruta e divida liquida (Sprint 3) ----
+    # min_count=2: se faltar uma das parcelas, o resultado fica nulo
+    # (melhor um vazio explicito do que um valor subestimado).
+    base["ebitda"] = base[
+        ["resultado_operacional", "depreciacao_amortizacao"]
+    ].sum(axis=1, min_count=2)
+    base["divida_bruta"] = base[
+        ["emprestimos_cp", "emprestimos_lp"]
+    ].sum(axis=1, min_count=2)
+    caixa_total = base[
+        ["caixa_equivalentes", "aplicacoes_financeiras"]
+    ].sum(axis=1, min_count=1)
+    base["divida_liquida"] = base["divida_bruta"] - caixa_total
+
+    # ---- validacao do balanco (conta 1 x conta 2) ----
     diff = (base["ativo_total"] - base["passivo_total"]).abs()
-    denom = base["ativo_total"].abs().replace(0, pd.NA)
+    denom = base["ativo_total"].abs().replace(0, np.nan)
     base["validacao_balanco_ok"] = (
         (diff / denom) < TOLERANCIA_BALANCO
     ).astype("Int64")
 
-    # ---- observacoes de auditoria ----
-    # Documentadas em config.OBSERVACOES. Sobrevivem a recargas.
-    base["observacao"] = base.apply(
-        lambda r: OBSERVACOES.get((r["empresa"], int(r["ano"]))), axis=1
+    # ---- identidade contabil: PC + PNC + PL == AT (secao 6.1) ----
+    # Teste mais forte: valida cada componente extraido do passivo.
+    soma = (
+        base["passivo_circulante"] + base["passivo_nao_circulante"]
+        + base["patrimonio_liquido"]
     )
-    n_obs = base["observacao"].notna().sum()
-    if n_obs:
-        log.info("  %d observacao(oes) de auditoria aplicada(s)", int(n_obs))
+    base["validacao_identidade_ok"] = (
+        (soma - base["ativo_total"]).abs() <= TOLERANCIA_IDENTIDADE
+    ).astype("Int64")
 
-    base = (
-        base[COLUNAS_FINAIS]
-        .sort_values(["empresa", "ano"])
-        .reset_index(drop=True)
+    # ---- observacoes de auditoria (config.OBSERVACOES) ----
+    base["observacao"] = [
+        OBSERVACOES.get((e, int(a))) for e, a in zip(base["empresa"], base["ano"])
+    ]
+
+    colunas = (
+        ["empresa", "ano", "cd_cvm", "razao_social"]
+        + ORDEM_INDICADORES
+        + COLUNAS_DERIVADAS
     )
+    base = base[colunas].sort_values(["empresa", "ano"]).reset_index(drop=True)
 
     log.info("  Base montada: %d linhas", len(base))
     return base
@@ -339,11 +432,21 @@ def auditar(base: pd.DataFrame) -> None:
         log.info("  [ok] Todas as %d combinacoes empresa/ano presentes", len(esperado))
 
     # nulos
-    log.info("\n  Completude por indicador:")
-    for col in ORDEM_INDICADORES + ["capital_terceiros"]:
-        nulos = base[col].isna().sum()
+    log.info("\n  Completude por variavel:")
+    for col in ORDEM_INDICADORES + ["capital_terceiros", "ebitda", "divida_liquida"]:
+        nulos = int(base[col].isna().sum())
         marca = "[ok]" if nulos == 0 else "[!] "
-        log.info("    %s %-26s | %d nulos de %d", marca, col, nulos, len(base))
+        tipo = "nucleo" if col in VARIAVEIS_NUCLEO else "compl."
+        log.info("    %s %-26s | %-6s | %d nulos de %d", marca, col, tipo, nulos, len(base))
+
+    # identidade contabil
+    falhas = base[base["validacao_identidade_ok"] != 1]
+    if falhas.empty:
+        log.info("\n  [ok] Identidade contabil (PC + PNC + PL = AT) em todas as linhas")
+    else:
+        log.warning("\n  [!] Identidade contabil NAO fecha em %d linhas:", len(falhas))
+        for _, r in falhas.iterrows():
+            log.warning("      %s %d", r["empresa"], r["ano"])
 
     # validacao do balanco
     invalidos = base[base["validacao_balanco_ok"] != 1]
@@ -365,36 +468,16 @@ def auditar(base: pd.DataFrame) -> None:
             len(ruim),
         )
 
-    # observacoes de auditoria registradas
-    com_obs = base[base["observacao"].notna()]
-    if not com_obs.empty:
-        log.info("\n  Observacoes de auditoria (%d):", len(com_obs))
-        for _, r in com_obs.iterrows():
-            log.info("    %s %d:", r["empresa"], r["ano"])
-            for linha in _quebrar(str(r["observacao"]), 64):
-                log.info("      %s", linha)
-
-
-def _quebrar(texto: str, largura: int) -> list:
-    """Quebra um texto longo em linhas, para o log ficar legivel."""
-    palavras, linhas, atual = texto.split(), [], ""
-    for p in palavras:
-        if len(atual) + len(p) + 1 > largura:
-            linhas.append(atual)
-            atual = p
-        else:
-            atual = f"{atual} {p}".strip()
-    if atual:
-        linhas.append(atual)
-    return linhas
-
 
 def gravar(conn: sqlite3.Connection, base: pd.DataFrame) -> None:
     conn.execute("DELETE FROM financial_data")
 
-    base[COLUNAS_FINAIS].to_sql(
-        "financial_data", conn, if_exists="append", index=False
-    )
+    cols = [
+        "empresa", "ano", "cd_cvm", "razao_social",
+        *ORDEM_INDICADORES,
+        *COLUNAS_DERIVADAS,
+    ]
+    base[cols].to_sql("financial_data", conn, if_exists="append", index=False)
 
     conn.execute(
         "INSERT INTO etl_log (etapa, detalhe, registros) VALUES (?,?,?)",
@@ -409,9 +492,9 @@ def gravar(conn: sqlite3.Connection, base: pd.DataFrame) -> None:
 
 
 def exibir(base: pd.DataFrame) -> None:
-    print("\n" + "=" * 82)
+    print("\n" + "=" * 78)
     print("BASE ANALITICA (valores em R$ milhoes)")
-    print("=" * 82)
+    print("=" * 78)
 
     v = base.copy()
     num = [
@@ -421,9 +504,6 @@ def exibir(base: pd.DataFrame) -> None:
     for c in num:
         v[c] = (v[c] / 1_000_000).round(1)
 
-    # marca visual para linhas com observacao de auditoria
-    v["obs"] = v["observacao"].notna().map({True: "*", False: ""})
-
     v = v.rename(columns={
         "receita_liquida": "receita", "lucro_liquido": "lucro",
         "ativo_total": "ativo", "patrimonio_liquido": "PL",
@@ -431,12 +511,7 @@ def exibir(base: pd.DataFrame) -> None:
     })
 
     print(v[["empresa", "ano", "cd_cvm", "receita", "lucro",
-             "ativo", "PL", "cap_terc", "FCO", "obs"]].to_string(index=False))
-
-    if (v["obs"] == "*").any():
-        print("\n  * linha com observacao de auditoria registrada.")
-        print("    Consulte: SELECT empresa, ano, observacao FROM financial_data")
-        print("              WHERE observacao IS NOT NULL;")
+             "ativo", "PL", "cap_terc", "FCO"]].to_string(index=False))
 
 
 # ===============================================================
@@ -454,7 +529,8 @@ def main() -> None:
             "Rode antes: python etl/04_criar_banco.py"
         )
 
-    with sqlite3.connect(BANCO) as conn:
+    conn = sqlite3.connect(BANCO)
+    try:
         carregar_raw(conn)
 
         if args.somente_raw:
@@ -467,11 +543,13 @@ def main() -> None:
         auditar(base)
         gravar(conn, base)
         exibir(base)
+    finally:
+        conn.close()
 
-    print("\n" + "=" * 82)
+    print("\n" + "=" * 78)
     print("CARGA CONCLUIDA")
     print("Confira: SELECT * FROM vw_base_analitica;")
-    print("=" * 82)
+    print("=" * 78)
 
 
 if __name__ == "__main__":

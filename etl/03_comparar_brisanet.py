@@ -35,22 +35,16 @@ COMO RODAR
   python etl/03_comparar_brisanet.py
 """
 
-from pathlib import Path
 import sys
 import pandas as pd
 
-# ---------------------------------------------------------------
-# CAMINHOS
-# ---------------------------------------------------------------
-RAIZ = Path(__file__).resolve().parent.parent
-DIR_RAW = RAIZ / "data" / "raw"
-DIR_EXPORTS = RAIZ / "data" / "exports"
-DIR_EXPORTS.mkdir(parents=True, exist_ok=True)
-
-# Periodo ampliado: os dados incluem 2020 (exercicio pre-IPO)
-ANOS = [2020, 2021, 2022, 2023, 2024, 2025]
-
-CSV_KWARGS = dict(sep=";", encoding="latin1", dtype=str)
+# REVISAO (Sprint 3): caminhos, anos, leitura e escala vem do config.py,
+# para que uma mudanca de escopo (ex.: incluir 2026 na Sprint 4) valha
+# para todos os scripts de uma vez.
+from config import (
+    ANOS, CSV_KWARGS, ESCALA, DIR_RAW, DIR_EXPORTS, RAIZ,
+    caminho_arquivo, normalizar_cvm,
+)
 
 # ---------------------------------------------------------------
 # ENTIDADES BRISANET (identificadas pelo CD_CVM, nao pelo nome)
@@ -72,27 +66,10 @@ INDICADORES = {
     "fluxo_caixa_operacional": ("DFC_MI", "6.01"),
 }
 
-ESCALA = {"UNIDADE": 1, "MIL": 1_000, "MILHAO": 1_000_000}
-
-
 # ---------------------------------------------------------------
-def caminho(demonstracao: str, ano: int) -> Path:
-    """Aceita CSVs em data/raw/<ano>/ ou soltos em data/raw/."""
-    nome = f"dfp_cia_aberta_{demonstracao}_con_{ano}.csv"
-    for c in (DIR_RAW / str(ano) / nome, DIR_RAW / nome):
-        if c.exists():
-            return c
-    return DIR_RAW / str(ano) / nome
-
-
-def normalizar_cvm(serie: pd.Series) -> pd.Series:
-    """CD_CVM vem com zeros a esquerda inconsistentes entre arquivos."""
-    return serie.astype(str).str.strip().str.zfill(6)
-
-
 def extrair(demonstracao: str, ano: int, codigo: str, indicador: str) -> pd.DataFrame:
     """Le um arquivo e devolve o valor da conta para as entidades Brisanet."""
-    arq = caminho(demonstracao, ano)
+    arq = caminho_arquivo(demonstracao, ano)
     if not arq.exists():
         return pd.DataFrame()
 

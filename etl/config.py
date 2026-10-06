@@ -6,8 +6,7 @@ Projeto Integrador III - Fatec Cotia
 Analise financeira de operadoras regionais de telecomunicacoes (CVM)
 
 Parametros centrais do projeto. Todo ajuste de escopo (anos, empresas,
-contas contabeis, observacoes de auditoria) deve ser feito AQUI, nunca
-dentro dos scripts.
+contas contabeis) deve ser feito AQUI, nunca dentro dos scripts.
 """
 
 from pathlib import Path
@@ -131,35 +130,65 @@ CONTAS = {
     "passivo_nao_circulante":   ("BPP",       "2.02",  True),
     "patrimonio_liquido":       ("BPP",       "2.03",  True),
     "fluxo_caixa_operacional":  ("DFC_MI",    "6.01",  True),
+
+    # --- Contas complementares (Sprint 3) -------------------------
+    # Todas sao contas FIXAS da CVM (ST_CONTA_FIXA = S), com codigo e
+    # descricao identicos nas 3 empresas e nos 6 exercicios. Servem para
+    # testar as hipoteses da secao 7.3 do relatorio da Sprint 2.
+    "resultado_operacional":    ("DRE",       "3.05",  False),  # EBIT
+    "resultado_financeiro":     ("DRE",       "3.06",  False),
+    "despesas_financeiras":     ("DRE",       "3.06.02", False),
+    "caixa_equivalentes":       ("BPA",       "1.01.01", False),
+    "aplicacoes_financeiras":   ("BPA",       "1.01.02", False),
+    "emprestimos_cp":           ("BPP",       "2.01.04", False),
+    "emprestimos_lp":           ("BPP",       "2.02.01", False),
+    "fluxo_caixa_investimento": ("DFC_MI",    "6.02",  False),
+    "fluxo_caixa_financiamento":("DFC_MI",    "6.03",  False),
+}
+
+# Contas que NAO sao fixas na CVM: o codigo muda entre empresas/anos
+# (ex.: a Desktop usa 6.01.01.06 ate 2022 e 6.01.01.02 depois).
+# Sao localizadas pela DESCRICAO dentro de um grupo de contas fixo.
+# Regra de seguranca: precisa existir EXATAMENTE 1 conta por empresa/ano;
+# caso contrario o valor fica nulo e o log registra um alerta.
+#   indicador: (demonstracao, prefixo do grupo, trecho da descricao)
+CONTAS_POR_DESCRICAO = {
+    "depreciacao_amortizacao": ("DFC_MI", "6.01.01.", "deprecia"),
 }
 
 # Ordem das colunas na tabela financial_data
-ORDEM_INDICADORES = list(CONTAS.keys())
+ORDEM_INDICADORES = list(CONTAS.keys()) + list(CONTAS_POR_DESCRICAO.keys())
+
+# Variaveis nucleares (as 9 da Sprint 2) - usadas na auditoria de completude
+VARIAVEIS_NUCLEO = [k for k, v in CONTAS.items() if v[2]]
 
 # ---------------------------------------------------------------
-# 7. OBSERVACOES DE AUDITORIA
+# 6.1 OBSERVACOES DE AUDITORIA
 # ---------------------------------------------------------------
-# Dados atipicos identificados durante a validacao da Sprint 2.
-# Chave: (empresa, ano). Valor: texto da observacao.
-#
-# Estas observacoes sao gravadas na coluna financial_data.observacao
-# e sobrevivem a qualquer recarga do ETL.
+# Registro textual de dados atipicos/decisoes, gravado na coluna
+# financial_data.observacao a cada execucao do 05_carga.py.
+# O dado NUNCA e alterado: apenas documentado.
 OBSERVACOES = {
+    ("Brisanet", 2021): (
+        "Lucro líquido próximo de zero (R$ 2,2 mi): razões com o lucro no "
+        "denominador (ex.: cobertura de caixa) ficam distorcidas."
+    ),
+    ("Brisanet", 2024): (
+        "Troca de entidade na série encadeada: a partir de 2024 os dados são "
+        "da Brisanet Serviços (CD_CVM 027693), sucessora da Participações."
+    ),
     ("Desktop", 2021): (
-        "FCO atipico: R$ 753,0 mi, equivalente a 215,8% da receita liquida "
-        "e cerca de 11x o EBIT do exercicio. Ano do IPO e da consolidacao de "
-        "quatro aquisicoes (C-Lig, Starnet, Net Barretos e LPNet). "
-        "Extracao validada: nao ha reapresentacao, a conta 6.01 corresponde "
-        "a Atividades Operacionais e a DFC fecha "
-        "(6.01 + 6.02 + 6.03 = 6.05, diferenca zero). "
-        "Provavel efeito nao recorrente de capital de giro decorrente da "
-        "consolidacao das adquiridas. Consultar Notas Explicativas. "
-        "Tratar como outlier no calculo de indicadores."
+        "Fluxo de caixa operacional atípico (R$ 753,0 mi = 215,8% da receita), "
+        "confirmado como valor publicado. Ver etl/07_diagnostico_dfc.py."
+    ),
+    ("Desktop", 2022): (
+        "FCO/receita de 12,4%, o menor da base, no exercício seguinte ao "
+        "valor atípico de 2021."
     ),
 }
 
 # ---------------------------------------------------------------
-# 8. LEITURA DOS CSVs DA CVM
+# 7. LEITURA DOS CSVs DA CVM
 # ---------------------------------------------------------------
 # NUNCA abra estes arquivos no Excel antes de processar: ele corrompe
 # os valores numericos. Separador ";", encoding Latin-1.
@@ -168,6 +197,11 @@ CSV_KWARGS = dict(sep=";", encoding="latin1", dtype=str)
 # Cada arquivo traz o exercicio de referencia (ULTIMO) e o anterior
 # (PENULTIMO). Usar apenas ULTIMO evita duplicar anos entre arquivos.
 ORDEM_EXERCICIO = "\u00daLTIMO"
+
+# O PENULTIMO (comparativo publicado no proprio arquivo) e usado apenas
+# como SALDO INICIAL do exercicio, para calcular ROE e ROA sobre a media
+# do patrimonio liquido e do ativo (definicao adotada na Sprint 1).
+ORDEM_EXERCICIO_ANTERIOR = "PEN\u00daLTIMO"
 
 ESCALA = {"UNIDADE": 1, "MIL": 1_000, "MILHAO": 1_000_000}
 
@@ -180,7 +214,7 @@ COLUNAS_UTEIS = [
 
 
 # ---------------------------------------------------------------
-# 9. UTILITARIOS
+# 8. UTILITARIOS
 # ---------------------------------------------------------------
 def normalizar_cvm(serie):
     """

@@ -1,31 +1,59 @@
+# -*- coding: utf-8 -*-
+"""
+etl/01_inspecionar_dados.py
+
+Projeto Integrador III - Fatec Cotia
+Inspecao inicial da estrutura de um arquivo da CVM.
+
+CORRECAO (revisao Sprint 3)
+---------------------------
+A versao anterior quebrava com NameError quando o arquivo nao existia:
+o filtro das empresas ficava FORA do bloco "else" e usava a variavel
+"df", que nunca tinha sido criada. Agora o script encerra com uma
+mensagem clara.
+
+COMO RODAR
+----------
+  python etl/01_inspecionar_dados.py              (DRE do ultimo ano)
+  python etl/01_inspecionar_dados.py BPP 2023     (outra demonstracao/ano)
+"""
+
+import sys
+
 import pandas as pd
-import os
 
-# Obtém o diretório do script atual
-base_dir = os.path.dirname(os.path.abspath(__file__))
-arquivo = os.path.join(base_dir, "../data/raw/2025/dfp_cia_aberta_DRE_con_2025.csv")
+from config import ANOS, CSV_KWARGS, RAIZ, caminho_arquivo
 
-# Verifica se o arquivo existe
-if not os.path.exists(arquivo):
-    print(f"Arquivo não encontrado: {arquivo}")
-else:
-    df = pd.read_csv(
-        arquivo,
-        sep=";",
-        encoding="latin1"
-    )
+GRUPOS = "BRISANET|UNIFIQUE|DESKTOP"
 
-    print(df.columns.tolist())
+
+def main() -> None:
+    demonstracao = sys.argv[1] if len(sys.argv) > 1 else "DRE"
+    ano = int(sys.argv[2]) if len(sys.argv) > 2 else max(ANOS)
+
+    arquivo = caminho_arquivo(demonstracao, ano)
+    if not arquivo.exists():
+        sys.exit(
+            f"Arquivo nao encontrado: {arquivo.relative_to(RAIZ)}\n"
+            "Coloque os CSVs da CVM em data/raw/<ano>/ (veja o README)."
+        )
+
+    df = pd.read_csv(arquivo, **CSV_KWARGS)
+
+    print(f"Arquivo: {arquivo.relative_to(RAIZ)}")
+    print(f"Linhas: {len(df):,}".replace(",", "."))
+    print("Colunas:", df.columns.tolist())
     print("\nTotal de empresas:", df["DENOM_CIA"].nunique())
 
-    
-
-empresas = df[
-    df["DENOM_CIA"].str.contains(
-        "BRISANET|UNIFIQUE|DESKTOP",
-        case=False,
-        na=False
+    empresas = (
+        df[df["DENOM_CIA"].str.contains(GRUPOS, case=False, na=False)]
+        [["DENOM_CIA", "CD_CVM", "CNPJ_CIA", "VERSAO"]]
+        .drop_duplicates()
+        .sort_values("DENOM_CIA")
     )
-]["DENOM_CIA"].unique()
+    print("\nEmpresas do projeto encontradas:")
+    print(empresas.to_string(index=False))
 
-print(empresas)
+
+if __name__ == "__main__":
+    main()

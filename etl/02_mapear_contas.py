@@ -27,77 +27,52 @@ COMO RODAR
   python etl/02_mapear_contas.py
 """
 
-from pathlib import Path
 import sys
 import pandas as pd
 
-# ---------------------------------------------------------------
-# CAMINHOS - funcionam independente de onde voce rodar o script
-# ---------------------------------------------------------------
-RAIZ = Path(__file__).resolve().parent.parent
-DIR_RAW = RAIZ / "data" / "raw"
-DIR_EXPORTS = RAIZ / "data" / "exports"
-DIR_EXPORTS.mkdir(parents=True, exist_ok=True)
-
-ANOS = [2020, 2021, 2022, 2023, 2024, 2025]
-
-DEMONSTRACOES = ["DRE", "BPA", "BPP", "DFC_MI"]
+# REVISAO (Sprint 3): anos, demonstracoes, contas e caminhos agora vem do
+# config.py - regra do proprio projeto ("todo ajuste de escopo deve ser
+# feito no config"). Antes este script tinha copias proprias dessas listas
+# e nao verificava as contas 1.01, 2.01 e 2.02, embora o relatorio da
+# Sprint 2 as apresente como confirmadas.
+from config import (
+    ANOS, DEMONSTRACOES, CSV_KWARGS, CONTAS, CONTAS_POR_DESCRICAO,
+    DIR_RAW, DIR_EXPORTS, RAIZ, caminho_arquivo,
+)
 
 # Termos usados para localizar as empresas em DENOM_CIA
 GRUPOS = ["BRISANET", "UNIFIQUE", "DESKTOP"]
 
-CSV_KWARGS = dict(sep=";", encoding="latin1", dtype=str)
+# Palavras-chave para a busca textual de contas candidatas em DS_CONTA.
+# Indicadores sem palavras-chave sao verificados apenas pelo codigo.
+PALAVRAS = {
+    "receita_liquida": ["receita"],
+    "lucro_liquido": ["lucro", "prejuizo", "prejuízo", "resultado l"],
+    "ativo_total": ["ativo total"],
+    "ativo_circulante": ["ativo circulante"],
+    "passivo_total": ["passivo total"],
+    "passivo_circulante": ["passivo circulante"],
+    "passivo_nao_circulante": ["passivo não circulante", "passivo nao circulante"],
+    "patrimonio_liquido": ["patrim"],
+    "fluxo_caixa_operacional": ["operacion"],
+}
 
 # ---------------------------------------------------------------
-# INDICADORES QUE PRECISAMOS LOCALIZAR
-# Para cada um: em qual demonstracao procurar, o codigo esperado
-# e palavras-chave para busca textual em DS_CONTA.
+# INDICADORES QUE PRECISAMOS LOCALIZAR (montado a partir do config)
 # ---------------------------------------------------------------
 INDICADORES = {
-    "receita_liquida": {
-        "demonstracao": "DRE",
-        "codigo_esperado": "3.01",
-        "palavras": ["receita"],
-    },
-    "lucro_liquido": {
-        "demonstracao": "DRE",
-        "codigo_esperado": "3.11",
-        "palavras": ["lucro", "prejuizo", "prejuízo", "resultado l"],
-    },
-    "ativo_total": {
-        "demonstracao": "BPA",
-        "codigo_esperado": "1",
-        "palavras": ["ativo total"],
-    },
-    "passivo_total": {
-        "demonstracao": "BPP",
-        "codigo_esperado": "2",
-        "palavras": ["passivo total"],
-    },
-    "patrimonio_liquido": {
-        "demonstracao": "BPP",
-        "codigo_esperado": "2.03",
-        "palavras": ["patrim"],
-    },
-    "fluxo_caixa_operacional": {
-        "demonstracao": "DFC_MI",
-        "codigo_esperado": "6.01",
-        "palavras": ["operacion"],
-    },
+    nome: {
+        "demonstracao": dem,
+        "codigo_esperado": codigo,
+        "palavras": PALAVRAS.get(nome, []),
+    }
+    for nome, (dem, codigo, _obrig) in CONTAS.items()
 }
 
 
 # ---------------------------------------------------------------
 # LEITURA
 # ---------------------------------------------------------------
-def caminho_arquivo(demonstracao: str, ano: int) -> Path:
-    """Procura o CSV em data/raw/<ano>/ e, como alternativa, em data/raw/."""
-    nome = f"dfp_cia_aberta_{demonstracao}_con_{ano}.csv"
-    candidatos = [DIR_RAW / str(ano) / nome, DIR_RAW / nome]
-    for c in candidatos:
-        if c.exists():
-            return c
-    return candidatos[0]  # retorna o esperado, para a mensagem de erro
 
 
 def ler(demonstracao: str, ano: int) -> pd.DataFrame:
@@ -218,7 +193,7 @@ def mapear_contas(dados: dict) -> pd.DataFrame:
 
         # candidatos: bate o codigo exato OU contem alguma palavra-chave
         por_codigo = df["CD_CONTA"] == codigo
-        por_texto = df["DS_CONTA"].str.lower().apply(
+        por_texto = df["DS_CONTA"].fillna("").str.lower().apply(
             lambda s: any(p in s for p in palavras)
         )
         cand = df[por_codigo | por_texto]
@@ -310,6 +285,44 @@ def sugerir(mapa: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------
+# ETAPA 4 - CONTAS NAO FIXAS (localizadas pela descricao)
+# ---------------------------------------------------------------
+def mapear_por_descricao(dados: dict) -> None:
+    print("\n" + "=" * 74)
+    print("ETAPA 4 | CONTAS LOCALIZADAS PELA DESCRICAO (nao fixas)")
+    print("=" * 74)
+
+    linhas = []
+    for indicador, (dem, prefixo, trecho) in CONTAS_POR_DESCRICAO.items():
+        partes = [df for (d, _a), df in dados.items() if d == dem and not df.empty]
+        if not partes:
+            continue
+        df = pd.concat(partes, ignore_index=True).drop_duplicates()
+        df = df[df["ORDEM_EXERC"].str.strip().str.upper().str.startswith("\u00da")]
+        cand = df[
+            df["CD_CONTA"].str.strip().str.startswith(prefixo)
+            & df["DS_CONTA"].fillna("").str.lower().str.contains(trecho)
+        ]
+        resumo = (
+            cand.groupby(["CD_CVM", "ano_arquivo"])
+                .agg(contas=("CD_CONTA", lambda s: ", ".join(sorted(set(s)))),
+                     qtd=("CD_CONTA", "nunique"))
+                .reset_index()
+        )
+        resumo["indicador"] = indicador
+        linhas.append(resumo)
+        print(f"\n### {indicador.upper()} (grupo {prefixo}*, descricao contem '{trecho}')")
+        for _, r in resumo.iterrows():
+            marca = "[ok]" if r["qtd"] == 1 else "[!] "
+            print(f"  {marca} {r['CD_CVM']} | {r['ano_arquivo']} | {r['contas']}")
+
+    if linhas:
+        destino = DIR_EXPORTS / "mapa_contas_por_descricao.csv"
+        pd.concat(linhas).to_csv(destino, index=False, sep=";", encoding="utf-8-sig")
+        print(f"\n  Salvo: {destino.relative_to(RAIZ)}")
+
+
+# ---------------------------------------------------------------
 def main() -> None:
     print("=" * 74)
     print("MAPEAMENTO DE ENTIDADES E CONTAS CONTABEIS - CVM")
@@ -337,6 +350,7 @@ def main() -> None:
     auditar_entidades(dados)
     mapa = mapear_contas(dados)
     sugerir(mapa)
+    mapear_por_descricao(dados)
 
     print("\n" + "=" * 74)
     print("CONCLUIDO. Revise os arquivos em data/exports/ antes do ETL.")

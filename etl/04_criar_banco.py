@@ -10,13 +10,22 @@ ARQUITETURA EM CAMADAS
   Camada 1 - RAW        : espelho dos CSVs da CVM, sem transformacao
   Camada 2 - ANALITICA  : financial_data (uma linha por empresa/ano)
   Camada 3 - INDICADORES: financial_indicators (vazia ate a Sprint 3)
-  Apoio                 : dim_entidade, etl_log, vw_base_analitica
+  Apoio                 : dim_entidade, etl_log
 
 Guardar a camada RAW no banco evita ter que voltar aos ZIPs da CVM
 caso surja a necessidade de um novo indicador (ex.: EBITDA).
 
 Este script e IDEMPOTENTE: pode ser executado quantas vezes quiser.
 Use --reset para apagar e recriar o banco do zero.
+
+MIGRACAO (revisao Sprint 3)
+---------------------------
+"CREATE TABLE IF NOT EXISTS" nao altera uma tabela que ja existe. Por
+isso, colunas novas (ex.: observacao, contas complementares, indicadores
+da Sprint 3) nunca chegavam a um banco criado antes. Agora a funcao
+migrar() compara as colunas esperadas com as existentes e executa
+ALTER TABLE ... ADD COLUMN para as que faltam. As VIEWS sao sempre
+recriadas, para refletir a definicao atual.
 
 COMO RODAR
 ----------
@@ -29,7 +38,9 @@ import logging
 import sqlite3
 import sys
 
-from config import BANCO, DIR_LOGS, ENTIDADES, CONTAS, RAIZ
+from config import (
+    BANCO, DIR_LOGS, ENTIDADES, CONTAS, CONTAS_POR_DESCRICAO, RAIZ,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,58 +96,90 @@ CREATE INDEX IF NOT EXISTS ix_raw_{tabela}_conta
 """
 
 # Camada analitica. Valores em REAIS (escala ja aplicada).
-DDL_FINANCIAL = """
-CREATE TABLE IF NOT EXISTS financial_data (
-    empresa                   TEXT    NOT NULL,
-    ano                       INTEGER NOT NULL,
-    cd_cvm                    TEXT    NOT NULL,
-    razao_social              TEXT,
+# As colunas sao declaradas em listas para que a MIGRACAO saiba
+# exatamente o que precisa existir.
+COLUNAS_FINANCIAL = [
+    ("receita_liquida", "REAL"),
+    ("lucro_liquido", "REAL"),
+    ("ativo_total", "REAL"),
+    ("ativo_circulante", "REAL"),
+    ("passivo_total", "REAL"),
+    ("passivo_circulante", "REAL"),
+    ("passivo_nao_circulante", "REAL"),
+    ("patrimonio_liquido", "REAL"),
+    ("fluxo_caixa_operacional", "REAL"),
+    # complementares (Sprint 3) - contas fixas da CVM
+    ("resultado_operacional", "REAL"),        # EBIT (3.05)
+    ("resultado_financeiro", "REAL"),         # 3.06
+    ("despesas_financeiras", "REAL"),         # 3.06.02
+    ("caixa_equivalentes", "REAL"),           # 1.01.01
+    ("aplicacoes_financeiras", "REAL"),       # 1.01.02
+    ("emprestimos_cp", "REAL"),               # 2.01.04
+    ("emprestimos_lp", "REAL"),               # 2.02.01
+    ("fluxo_caixa_investimento", "REAL"),     # 6.02
+    ("fluxo_caixa_financiamento", "REAL"),    # 6.03
+    ("depreciacao_amortizacao", "REAL"),      # DFC 6.01.01.* (por descricao)
+    # derivadas
+    ("capital_terceiros", "REAL"),            # 2.01 + 2.02 (NAO usar conta 2)
+    ("ebitda", "REAL"),                       # EBIT + D&A
+    ("divida_bruta", "REAL"),                 # 2.01.04 + 2.02.01
+    ("divida_liquida", "REAL"),               # divida bruta - caixa - aplicacoes
+    # controle e auditoria
+    ("validacao_balanco_ok", "INTEGER"),      # ativo_total == passivo_total
+    ("validacao_identidade_ok", "INTEGER"),   # PC + PNC + PL == ativo_total
+    ("observacao", "TEXT"),                   # dados atipicos (config.OBSERVACOES)
+]
 
-    receita_liquida           REAL,
-    lucro_liquido             REAL,
-    ativo_total               REAL,
-    ativo_circulante          REAL,
-    passivo_total             REAL,
-    passivo_circulante        REAL,
-    passivo_nao_circulante    REAL,
-    patrimonio_liquido        REAL,
-    fluxo_caixa_operacional   REAL,
+DDL_FINANCIAL = (
+    "CREATE TABLE IF NOT EXISTS financial_data (\n"
+    "    empresa      TEXT    NOT NULL,\n"
+    "    ano          INTEGER NOT NULL,\n"
+    "    cd_cvm       TEXT    NOT NULL,\n"
+    "    razao_social TEXT,\n"
+    + "".join(f"    {nome} {tipo},\n" for nome, tipo in COLUNAS_FINANCIAL)
+    + "    atualizado_em TEXT DEFAULT (datetime('now','localtime')),\n"
+    "    PRIMARY KEY (empresa, ano)\n"
+    ");"
+)
 
-    -- capital de terceiros = 2.01 + 2.02
-    -- NAO usar passivo_total (conta 2), que inclui o PL
-    capital_terceiros         REAL,
+# Camada de indicadores - populada pelo etl/08_indicadores.py (Sprint 3).
+# Percentuais gravados como FRACAO (0,125 = 12,5%).
+COLUNAS_INDICADORES = [
+    ("margem_liquida", "REAL"),            # lucro / receita
+    ("roe", "REAL"),                       # lucro / PL medio
+    ("roa", "REAL"),                       # lucro / ativo medio
+    ("endividamento_geral", "REAL"),       # capital terceiros / ativo total
+    ("composicao_endividamento", "REAL"),  # passivo circ. / capital terceiros
+    ("liquidez_corrente", "REAL"),         # ativo circ. / passivo circ.
+    ("cobertura_caixa", "REAL"),           # fco / lucro liquido
+    # complementares - hipoteses da secao 7.3 (Sprint 2)
+    ("margem_ebitda", "REAL"),             # ebitda / receita
+    ("margem_fco", "REAL"),                # fco / receita
+    ("divida_liquida_ebitda", "REAL"),     # divida liquida / ebitda
+    ("peso_resultado_financeiro", "REAL"), # -resultado financeiro / EBIT
+    ("depreciacao_receita", "REAL"),       # D&A / receita
+    ("observacao", "TEXT"),
+]
 
-    -- validacao: ativo_total deve ser igual a passivo_total
-    validacao_balanco_ok      INTEGER,
+DDL_INDICADORES = (
+    "CREATE TABLE IF NOT EXISTS financial_indicators (\n"
+    "    empresa  TEXT    NOT NULL,\n"
+    "    ano      INTEGER NOT NULL,\n"
+    + "".join(f"    {nome} {tipo},\n" for nome, tipo in COLUNAS_INDICADORES)
+    + "    calculado_em TEXT DEFAULT (datetime('now','localtime')),\n"
+    "    PRIMARY KEY (empresa, ano),\n"
+    "    FOREIGN KEY (empresa, ano) REFERENCES financial_data (empresa, ano)\n"
+    ");"
+)
 
-    -- observacoes de auditoria sobre dados atipicos
-    -- alimentada por config.OBSERVACOES
-    observacao                TEXT,
-
-    atualizado_em             TEXT DEFAULT (datetime('now','localtime')),
-
-    PRIMARY KEY (empresa, ano)
-);
-"""
-
-# Camada de indicadores - estrutura criada agora, populada na Sprint 3.
-DDL_INDICADORES = """
-CREATE TABLE IF NOT EXISTS financial_indicators (
-    empresa                  TEXT    NOT NULL,
-    ano                      INTEGER NOT NULL,
-
-    margem_liquida           REAL,   -- lucro / receita
-    roe                      REAL,   -- lucro / patrimonio liquido
-    roa                      REAL,   -- lucro / ativo total
-    endividamento_geral      REAL,   -- capital terceiros / ativo total
-    composicao_endividamento REAL,   -- passivo circ. / capital terceiros
-    liquidez_corrente        REAL,   -- ativo circ. / passivo circ.
-    cobertura_caixa          REAL,   -- fco / lucro liquido
-
-    calculado_em             TEXT DEFAULT (datetime('now','localtime')),
-
-    PRIMARY KEY (empresa, ano),
-    FOREIGN KEY (empresa, ano) REFERENCES financial_data (empresa, ano)
+# Alertas de interpretacao dos indicadores (uma linha por ocorrencia)
+DDL_ALERTAS = """
+CREATE TABLE IF NOT EXISTS alertas_indicadores (
+    empresa    TEXT    NOT NULL,
+    ano        INTEGER NOT NULL,
+    indicador  TEXT    NOT NULL,
+    tipo       TEXT    NOT NULL,   -- nao_calculado | distorcido | atipico | contexto
+    motivo     TEXT    NOT NULL
 );
 """
 
@@ -150,28 +193,25 @@ CREATE TABLE IF NOT EXISTS etl_log (
 );
 """
 
-# View pronta para o Streamlit consumir na Sprint 3.
-DDL_VIEW = """
-CREATE VIEW IF NOT EXISTS vw_base_analitica AS
-SELECT
-    f.empresa,
-    f.ano,
-    f.cd_cvm,
-    f.razao_social,
-    f.receita_liquida,
-    f.lucro_liquido,
-    f.ativo_total,
-    f.ativo_circulante,
-    f.capital_terceiros,
-    f.passivo_circulante,
-    f.passivo_nao_circulante,
-    f.patrimonio_liquido,
-    f.fluxo_caixa_operacional,
-    f.validacao_balanco_ok,
-    f.observacao
-FROM financial_data f
-ORDER BY f.empresa, f.ano;
-"""
+# Views prontas para o Streamlit (dashboard/). Recriadas a cada execucao.
+DDL_VIEWS = {
+    "vw_base_analitica": (
+        "CREATE VIEW vw_base_analitica AS\n"
+        "SELECT f.empresa, f.ano, f.cd_cvm, f.razao_social,\n"
+        + ",\n".join(
+            f"       f.{nome}" for nome, _ in COLUNAS_FINANCIAL
+        )
+        + "\nFROM financial_data f\nORDER BY f.empresa, f.ano;"
+    ),
+    "vw_indicadores": (
+        "CREATE VIEW vw_indicadores AS\n"
+        "SELECT i.empresa, i.ano,\n"
+        + ",\n".join(
+            f"       i.{nome}" for nome, _ in COLUNAS_INDICADORES
+        )
+        + "\nFROM financial_indicators i\nORDER BY i.empresa, i.ano;"
+    ),
+}
 
 
 # ---------------------------------------------------------------
@@ -194,40 +234,36 @@ def criar(conn: sqlite3.Connection) -> None:
     log.info("Criando financial_indicators")
     cur.execute(DDL_INDICADORES)
 
+    log.info("Criando alertas_indicadores")
+    cur.execute(DDL_ALERTAS)
+
     log.info("Criando etl_log")
     cur.execute(DDL_LOG)
 
-    log.info("Criando vw_base_analitica")
-    cur.execute(DDL_VIEW)
+    migrar(conn)
+
+    for nome, ddl in DDL_VIEWS.items():
+        log.info("Recriando %s", nome)
+        cur.execute(f"DROP VIEW IF EXISTS {nome}")
+        cur.execute(ddl)
 
     conn.commit()
 
 
 def migrar(conn: sqlite3.Connection) -> None:
-    """
-    Adiciona colunas novas a bancos criados por versoes anteriores
-    deste script, sem perder os dados ja carregados.
-    """
-    cur = conn.cursor()
-    cur.execute("PRAGMA table_info(financial_data)")
-    existentes = {linha[1] for linha in cur.fetchall()}
-
-    novas = {
-        "observacao": "TEXT",
+    """Acrescenta colunas que faltam em bancos criados por versoes antigas."""
+    esperado = {
+        "financial_data": COLUNAS_FINANCIAL,
+        "financial_indicators": COLUNAS_INDICADORES,
     }
-
-    for coluna, tipo in novas.items():
-        if coluna not in existentes:
-            cur.execute(
-                f"ALTER TABLE financial_data ADD COLUMN {coluna} {tipo}"
-            )
-            log.info("Migracao | coluna adicionada: financial_data.%s", coluna)
-
-    # a view precisa ser recriada se a estrutura mudou
-    cur.execute("DROP VIEW IF EXISTS vw_base_analitica")
-    cur.execute(DDL_VIEW)
-
-    conn.commit()
+    for tabela, colunas in esperado.items():
+        existentes = {
+            linha[1] for linha in conn.execute(f"PRAGMA table_info({tabela})")
+        }
+        for nome, tipo in colunas:
+            if nome not in existentes:
+                conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
+                log.warning("  Migracao: coluna %s.%s adicionada", tabela, nome)
 
 
 def popular_dimensao(conn: sqlite3.Connection) -> None:
@@ -280,6 +316,8 @@ def resumir(conn: sqlite3.Connection) -> None:
     print("-" * 70)
     for ind, (dem, cod, _) in CONTAS.items():
         print(f"  {ind:26s} | {dem:7s} | conta {cod}")
+    for ind, (dem, prefixo, trecho) in CONTAS_POR_DESCRICAO.items():
+        print(f"  {ind:26s} | {dem:7s} | {prefixo}* contendo '{trecho}'")
 
 
 def main() -> None:
@@ -307,10 +345,9 @@ def main() -> None:
 
     novo = not BANCO.exists()
 
-    with sqlite3.connect(BANCO) as conn:
+    conn = sqlite3.connect(BANCO)
+    try:
         criar(conn)
-        if not novo:
-            migrar(conn)
         popular_dimensao(conn)
         conn.execute(
             "INSERT INTO etl_log (etapa, detalhe, registros) VALUES (?,?,?)",
@@ -318,6 +355,8 @@ def main() -> None:
         )
         conn.commit()
         resumir(conn)
+    finally:
+        conn.close()
 
     print("\n" + "=" * 70)
     print(f"Banco pronto: {BANCO.relative_to(RAIZ)}")

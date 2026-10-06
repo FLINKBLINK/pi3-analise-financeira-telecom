@@ -40,6 +40,7 @@ COMO RODAR
 
 import logging
 import sqlite3
+from contextlib import closing
 
 import matplotlib
 matplotlib.use("Agg")  # backend sem interface grafica
@@ -77,16 +78,18 @@ CORES = {
 }
 
 TITULOS = {
-    "receita_liquida":         "Receita Liquida",
-    "lucro_liquido":           "Lucro Liquido",
+    "receita_liquida":         "Receita Líquida",
+    "lucro_liquido":           "Lucro Líquido",
     "ativo_total":             "Ativo Total",
     "ativo_circulante":        "Ativo Circulante",
-    "patrimonio_liquido":      "Patrimonio Liquido",
+    "patrimonio_liquido":      "Patrimônio Líquido",
     "capital_terceiros":       "Capital de Terceiros",
     "passivo_circulante":      "Passivo Circulante",
-    "passivo_nao_circulante":  "Passivo Nao Circulante",
+    "passivo_nao_circulante":  "Passivo Não Circulante",
     "fluxo_caixa_operacional": "Fluxo de Caixa Operacional",
 }
+
+FONTE = "Fonte: CVM – Formulário DFP (consolidado). Elaboração própria."
 
 # Indicadores destacados no painel consolidado
 PAINEL = [
@@ -114,7 +117,7 @@ def carregar() -> pd.DataFrame:
             "Rode antes: python etl/04_criar_banco.py && python etl/05_carga.py"
         )
 
-    with sqlite3.connect(BANCO) as conn:
+    with closing(sqlite3.connect(BANCO)) as conn:
         df = pd.read_sql(
             "SELECT * FROM financial_data ORDER BY empresa, ano", conn
         )
@@ -169,22 +172,18 @@ def grafico_evolucao(base: pd.DataFrame, coluna: str) -> None:
         )
 
     ax.set_title(
-        f"{TITULOS[coluna]} | Operadoras Regionais de Telecomunicacoes",
+        f"{TITULOS[coluna]} | Operadoras Regionais de Telecomunicações",
         fontsize=12, pad=12,
     )
-    ax.set_xlabel("Exercicio")
-    ax.set_ylabel("R$ milhoes")
+    ax.set_xlabel("Exercício")
+    ax.set_ylabel("R$ milhões")
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(milhoes))
     ax.set_xticks(ANOS)
     ax.axhline(0, color="grey", linewidth=0.8, zorder=0)
     marcar_quebra(ax, set(base["empresa"]))
     ax.legend(frameon=False)
 
-    fig.text(
-        0.01, 0.01,
-        "Fonte: CVM - Formulario DFP (consolidado). Elaboracao propria.",
-        fontsize=7, color="grey",
-    )
+    fig.text(0.01, 0.01, FONTE, fontsize=7, color="grey")
     fig.tight_layout(rect=[0, 0.03, 1, 1])
 
     destino = DIR_GRAFICOS / f"evolucao_{coluna}.png"
@@ -202,19 +201,15 @@ def grafico_comparativo(base: pd.DataFrame, coluna: str) -> None:
     pivot.plot(kind="bar", ax=ax, width=0.78, color=cores, edgecolor="none")
 
     ax.set_title(f"{TITULOS[coluna]} | comparativo anual", fontsize=12, pad=12)
-    ax.set_xlabel("Exercicio")
-    ax.set_ylabel("R$ milhoes")
+    ax.set_xlabel("Exercício")
+    ax.set_ylabel("R$ milhões")
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(milhoes))
     ax.tick_params(axis="x", rotation=0)
     ax.axhline(0, color="grey", linewidth=0.8)
     ax.legend(frameon=False, title=None)
     ax.grid(axis="x", visible=False)
 
-    fig.text(
-        0.01, 0.01,
-        "Fonte: CVM - Formulario DFP (consolidado). Elaboracao propria.",
-        fontsize=7, color="grey",
-    )
+    fig.text(0.01, 0.01, FONTE, fontsize=7, color="grey")
     fig.tight_layout(rect=[0, 0.03, 1, 1])
 
     destino = DIR_GRAFICOS / f"comparativo_{coluna}.png"
@@ -239,18 +234,19 @@ def painel_geral(base: pd.DataFrame) -> None:
         ax.set_xticks(ANOS)
         ax.tick_params(labelsize=8)
         ax.axhline(0, color="grey", linewidth=0.7, zorder=0)
+        marcar_quebra(ax, set(base["empresa"]))
 
     axes.flat[0].legend(frameon=False, fontsize=9)
 
     fig.suptitle(
         "Panorama Financeiro | Brisanet, Unifique e Desktop | "
-        f"{min(ANOS)}-{max(ANOS)}  (valores em R$ milhoes)",
+        f"{min(ANOS)}-{max(ANOS)}  (valores em R$ milhões)",
         fontsize=13.5, y=0.985,
     )
     fig.text(
         0.01, 0.01,
-        "Fonte: CVM - Formulario DFP (consolidado). Elaboracao propria. "
-        "Serie da Brisanet encadeada: Participacoes ate 2023, Servicos a partir de 2024.",
+        FONTE + " Série da Brisanet encadeada: Participações até 2023, "
+        "Serviços a partir de 2024.",
         fontsize=8, color="grey",
     )
     fig.tight_layout(rect=[0, 0.025, 1, 0.97])
@@ -278,6 +274,17 @@ def estatisticas(base: pd.DataFrame) -> None:
     log.info("Estatisticas descritivas salvas")
 
 
+def variacao_segura(serie: pd.Series) -> pd.Series:
+    """
+    Variacao percentual sobre o valor ABSOLUTO do ano anterior.
+    Com base negativa (ex.: prejuizo), o pct_change() comum inverte o sinal:
+    de -10 para +5 ele daria -150%, quando houve melhora. Aqui da +150%.
+    Com base zero, devolve nulo.
+    """
+    anterior = serie.shift(1)
+    return (serie - anterior) / anterior.abs().replace(0, float("nan"))
+
+
 def variacoes(base: pd.DataFrame) -> pd.DataFrame:
     """Variacao percentual ano a ano - descritivo, sem interpretacao."""
     colunas = list(TITULOS)
@@ -285,7 +292,7 @@ def variacoes(base: pd.DataFrame) -> pd.DataFrame:
 
     for col in colunas:
         var[f"var_{col}_%"] = (
-            var.groupby("empresa")[col].pct_change() * 100
+            var.groupby("empresa")[col].transform(variacao_segura) * 100
         ).round(2)
 
     destino = DIR_EXPORTS / "variacoes_anuais.csv"
@@ -297,7 +304,7 @@ def variacoes(base: pd.DataFrame) -> pd.DataFrame:
     return var
 
 
-def resumo(base: pd.DataFrame) -> None:
+def resumo(base: pd.DataFrame) -> pd.DataFrame:
     """
     Resumo de crescimento acumulado no periodo.
     Descritivo: mostra o quanto cada variavel cresceu, sem explicar por que.
@@ -314,8 +321,8 @@ def resumo(base: pd.DataFrame) -> None:
         for col in PAINEL:
             v0 = ini[col].iloc[0]
             v1 = fim[col].iloc[0]
-            if pd.isna(v0) or pd.isna(v1) or v0 == 0:
-                continue
+            if pd.isna(v0) or pd.isna(v1) or v0 <= 0:
+                continue  # crescimento so faz sentido com base positiva
 
             linhas.append({
                 "empresa": empresa,
@@ -383,13 +390,22 @@ def observacoes(base: pd.DataFrame) -> None:
             )
 
     # 4. caixa operacional x lucro
-    print("\n4. FCO vs LUCRO LIQUIDO (razao media no periodo)")
+    # REVISAO: a MEDIA das razoes era dominada por um unico ano com lucro
+    # quase nulo (Brisanet 2021: R$ 2,2 mi -> 144x), o que inflava a media
+    # da Brisanet para 30x. Mediana e razao agregada sao mais robustas.
+    print("\n4. FCO vs LUCRO LIQUIDO no periodo (mediana e razao agregada)")
     for empresa, g in base.groupby("empresa"):
-        razao = (g["fluxo_caixa_operacional"] / g["lucro_liquido"]).replace(
-            [float("inf"), float("-inf")], pd.NA
-        ).dropna()
+        validos = g[g["lucro_liquido"] > 0]
+        razao = validos["fluxo_caixa_operacional"] / validos["lucro_liquido"]
         if not razao.empty:
-            print(f"   {empresa:9s} | {razao.mean():5.1f}x")
+            agregada = (
+                validos["fluxo_caixa_operacional"].sum()
+                / validos["lucro_liquido"].sum()
+            )
+            print(
+                f"   {empresa:9s} | mediana {razao.median():5.1f}x"
+                f" | agregada {agregada:5.1f}x"
+            )
 
     print(
         "\nNOTA: a razao FCO/Lucro acima e apenas descritiva. A analise de\n"
